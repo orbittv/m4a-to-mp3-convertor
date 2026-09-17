@@ -18,6 +18,20 @@ FFMPEG_URL = (
     "ffmpeg-master-latest-win64-gpl.zip"
 )
 
+AUDIO_EXTENSIONS = {
+    ".m4a", ".aac", ".mp3", ".flac", ".wav", ".ogg", ".oga",
+    ".wma", ".opus", ".aiff", ".aif", ".ape", ".mp2", ".ac3",
+    ".wv", ".mka", ".ra", ".amr",
+}
+
+# target format -> (ffmpeg -f flag, codec flags, default extension)
+OUTPUT_FORMATS = {
+    "mp3":  ("mp3",  ["-acodec", "libmp3lame"],          ".mp3"),
+    "flac": ("flac", ["-acodec", "flac"],                ".flac"),
+    "ogg":  ("ogg",  ["-acodec", "libvorbis"],           ".ogg"),
+    "wav":  ("wav",  ["-acodec", "pcm_s16le"],           ".wav"),
+}
+
 BG       = "#1e1e2e"
 BG2      = "#2a2a3e"
 ACCENT   = "#7c6af7"
@@ -126,6 +140,7 @@ class ConverterApp(tk.Tk):
         self._file_meta = {}   # idx -> (bitrate_str, samplerate_str)
         self._converting = False
         self._ffmpeg_exe = None
+        self._target_fmt = tk.StringVar(value="mp3")
 
         self._build_styles()
         self._build_ui()
@@ -171,18 +186,27 @@ class ConverterApp(tk.Tk):
         ttk.Button(src_frame, text="Source", style="App.TButton",
                    command=self._pick_source).pack(side="left")
         tk.Label(src_frame, textvariable=self.source_dir, bg=BG, fg=FG_DIM,
-                 font=("Segoe UI", 9), width=60, anchor="w", padx=8).pack(side="left")
+                 font=("Segoe UI", 9), width=50, anchor="w", padx=8).pack(side="left")
 
         out_frame = tk.Frame(top, bg=BG, padx=16)
         out_frame.pack(side="left")
         ttk.Button(out_frame, text="Output", style="App.TButton",
                    command=self._pick_output).pack(side="left")
         tk.Label(out_frame, textvariable=self.output_dir, bg=BG, fg=FG_DIM,
-                 font=("Segoe UI", 9), width=60, anchor="w", padx=8).pack(side="left")
+                 font=("Segoe UI", 9), width=50, anchor="w", padx=8).pack(side="left")
 
         self._convert_btn = ttk.Button(top, text="  Convert", style="Convert.TButton",
                                        command=self._start_conversion)
         self._convert_btn.pack(side="right")
+
+        self._fmt_combo = ttk.Combobox(
+            top, textvariable=self._target_fmt,
+            values=list(OUTPUT_FORMATS.keys()),
+            state="readonly", width=7,
+            font=("Segoe UI", 10),
+        )
+        self._fmt_combo.pack(side="right", padx=12)
+        self._fmt_combo.bind("<<ComboboxSelected>>", self._on_fmt_changed)
 
         tk.Frame(self, bg=ACCENT, height=1).pack(fill="x")
 
@@ -205,19 +229,26 @@ class ConverterApp(tk.Tk):
         table_frame = tk.Frame(self, bg=BG)
         table_frame.pack(fill="both", expand=True, padx=16, pady=12)
 
-        cols = ("name", "format", "bitrate", "samplerate", "status")
+        cols = ("name", "format", "bitrate", "samplerate",
+                "tofmt", "tobr", "tosr", "status")
         self._tree = ttk.Treeview(table_frame, columns=cols, show="headings",
                                   selectmode="browse")
-        self._tree.heading("name",       text="File name")
-        self._tree.heading("format",     text="Format")
-        self._tree.heading("bitrate",    text="Bitrate")
+        self._tree.heading("name",     text="File name")
+        self._tree.heading("format",   text="Format")
+        self._tree.heading("bitrate",  text="Bitrate")
         self._tree.heading("samplerate", text="Sample Rate")
-        self._tree.heading("status",     text="Status")
-        self._tree.column("name",       width=480, stretch=True,  anchor="w")
-        self._tree.column("format",     width=110, stretch=False, anchor="center")
-        self._tree.column("bitrate",    width=110, stretch=False, anchor="center")
-        self._tree.column("samplerate", width=110, stretch=False, anchor="center")
-        self._tree.column("status",     width=110, stretch=False, anchor="center")
+        self._tree.heading("tofmt",    text="To Format")
+        self._tree.heading("tobr",     text="To Bitrate")
+        self._tree.heading("tosr",     text="To Sample Rate")
+        self._tree.heading("status",   text="Status")
+        self._tree.column("name",      width=310, stretch=True,  anchor="w")
+        self._tree.column("format",    width=75,  stretch=False, anchor="center")
+        self._tree.column("bitrate",   width=90,  stretch=False, anchor="center")
+        self._tree.column("samplerate",width=95,  stretch=False, anchor="center")
+        self._tree.column("tofmt",     width=85,  stretch=False, anchor="center")
+        self._tree.column("tobr",      width=90,  stretch=False, anchor="center")
+        self._tree.column("tosr",      width=105, stretch=False, anchor="center")
+        self._tree.column("status",    width=85,  stretch=False, anchor="center")
 
         vsb = ttk.Scrollbar(table_frame, orient="vertical",
                             command=self._tree.yview)
@@ -283,38 +314,70 @@ class ConverterApp(tk.Tk):
         self._files = sorted([
             os.path.join(folder, f)
             for f in os.listdir(folder)
-            if f.lower().endswith(".m4a")
+            if os.path.splitext(f)[1].lower() in AUDIO_EXTENSIONS
         ])
         self._file_meta = {}
         for row in self._tree.get_children():
             self._tree.delete(row)
         for i, path in enumerate(self._files):
             fname = os.path.basename(path)
-            tag = "odd" if i % 2 else "even"
+            ext   = os.path.splitext(fname)[1].lstrip(".").upper()
+            tag   = "odd" if i % 2 else "even"
             self._tree.insert("", "end", iid=str(i),
-                              values=(fname, "M4A -> MP3", "...", "...", "Ready"),
+                              values=(fname, ext, "...", "...", "...", "...", "...", "Ready"),
                               tags=(tag,))
         n = len(self._files)
         self._count_var.set("{} file{} found".format(n, "s" if n != 1 else ""))
-        self._status_var.set("Reading file info..." if n else "No .m4a files found")
+        self._status_var.set("Reading file info..." if n else "No audio files found")
         self._prog_var.set(0)
         if n:
             threading.Thread(target=self._probe_all, daemon=True).start()
 
     def _probe_all(self):
-        """Probe each file in background and update bitrate/samplerate columns."""
+        """Probe each file in background and update columns."""
         for i, path in enumerate(self._files):
             br, sr = probe_file(path)
             self._file_meta[i] = (br, sr)
             self.after(0, self._update_meta_row, i, br, sr)
         self.after(0, lambda: self._status_var.set("Ready to convert"))
 
+    def _calc_to_params(self, br, sr, fmt):
+        """Compute To Bitrate and To Sample Rate strings for given target format."""
+        to_fmt = fmt.upper()
+        if fmt in ("flac", "wav"):
+            to_br = "lossless"
+        else:
+            try:
+                to_br = "{}k".format(int(br.split()[0])) if br != "?" else "192k"
+            except Exception:
+                to_br = "192k"
+        try:
+            to_sr = sr.split()[0] + " Hz" if sr != "?" else "44100 Hz"
+        except Exception:
+            to_sr = "44100 Hz"
+        return to_fmt, to_br, to_sr
+
     def _update_meta_row(self, idx, br, sr):
         iid = str(idx)
         if not self._tree.exists(iid):
             return
+        fmt = self._target_fmt.get()
+        to_fmt, to_br, to_sr = self._calc_to_params(br, sr, fmt)
         old = self._tree.item(iid, "values")
-        self._tree.item(iid, values=(old[0], old[1], br, sr, old[4]))
+        self._tree.item(iid, values=(old[0], old[1], br, sr, to_fmt, to_br, to_sr, old[7]))
+
+    def _on_fmt_changed(self, _event=None):
+        """Refresh To columns when user changes the output format combobox."""
+        fmt = self._target_fmt.get()
+        for i in range(len(self._files)):
+            iid = str(i)
+            if not self._tree.exists(iid):
+                continue
+            br, sr = self._file_meta.get(i, ("?", "?"))
+            to_fmt, to_br, to_sr = self._calc_to_params(br, sr, fmt)
+            old = self._tree.item(iid, "values")
+            self._tree.item(iid, values=(old[0], old[1], old[2], old[3],
+                                         to_fmt, to_br, to_sr, old[7]))
 
     def _start_conversion(self):
         if self._converting:
@@ -338,16 +401,17 @@ class ConverterApp(tk.Tk):
         threading.Thread(target=self._convert_thread, daemon=True).start()
 
     def _convert_thread(self):
-        total = len(self._files)
-        done  = 0
+        total  = len(self._files)
+        done   = 0
+        fmt    = self._target_fmt.get()
+        _, _, ext = OUTPUT_FORMATS.get(fmt, ("mp3", ["-acodec", "libmp3lame"], ".mp3"))
         for i, path in enumerate(self._files):
             fname    = os.path.basename(path)
             stem     = os.path.splitext(fname)[0]
-            out_file = os.path.join(self.output_dir.get(), stem + ".mp3")
+            out_file = os.path.join(self.output_dir.get(), stem + ext)
             self.after(0, self._set_status, i, "Progress")
-            # use probed meta if available
             br_str, sr_str = self._file_meta.get(i, ("?", "?"))
-            success = self._run_ffmpeg(path, out_file, br_str, sr_str)
+            success = self._run_ffmpeg(path, out_file, fmt, br_str, sr_str)
             status  = "Done" if success else "Error"
             done   += 1
             pct     = done * 100 / total
@@ -357,19 +421,22 @@ class ConverterApp(tk.Tk):
                        self._status_var.set("Converting... {}/{}".format(d, t)))
         self.after(0, self._conversion_done)
 
-    def _run_ffmpeg(self, src, dst, br_str="?", sr_str="?"):
-        # parse bitrate: "256 kbps" -> "256k", fallback 192k
-        try:
-            ab = str(int(br_str.split()[0])) + "k" if br_str != "?" else "192k"
-        except Exception:
-            ab = "192k"
-        # parse sample rate: "44100 Hz" -> "44100", fallback 44100
+    def _run_ffmpeg(self, src, dst, fmt="mp3", br_str="?", sr_str="?"):
+        ffmt, codec_flags, _ = OUTPUT_FORMATS.get(fmt, ("mp3", ["-acodec", "libmp3lame"], ".mp3"))
+        # parse sample rate
         try:
             ar = sr_str.split()[0] if sr_str != "?" else "44100"
         except Exception:
             ar = "44100"
-        cmd = [self._ffmpeg_exe, "-y", "-i", src,
-               "-vn", "-ab", ab, "-ar", ar, "-f", "mp3", dst]
+        cmd = [self._ffmpeg_exe, "-y", "-i", src, "-vn"]
+        # bitrate only meaningful for lossy formats
+        if fmt in ("mp3", "ogg"):
+            try:
+                ab = str(int(br_str.split()[0])) + "k" if br_str != "?" else "192k"
+            except Exception:
+                ab = "192k"
+            cmd += ["-ab", ab]
+        cmd += ["-ar", ar] + codec_flags + ["-f", ffmt, dst]
         try:
             r = subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, timeout=300)
@@ -385,7 +452,10 @@ class ConverterApp(tk.Tk):
                 if t not in ("progress", "done", "error")]
         tags.append(status.lower())
         old = self._tree.item(iid, "values")
-        self._tree.item(iid, values=(old[0], old[1], old[2], old[3], status), tags=tags)
+        self._tree.item(iid,
+                        values=(old[0], old[1], old[2], old[3],
+                                old[4], old[5], old[6], status),
+                        tags=tags)
         self._tree.see(iid)
 
     def _conversion_done(self):
