@@ -224,9 +224,15 @@ class ConverterApp(tk.Tk):
         self._tree.tag_configure("done",     foreground=GREEN)
         self._tree.tag_configure("error",    foreground=RED)
 
+        bottom_bar = tk.Frame(self, bg=BG)
+        bottom_bar.pack(side="bottom", fill="x", pady=4, padx=16)
+
         self._ffmpeg_var = tk.StringVar(value="Checking ffmpeg...")
-        tk.Label(self, textvariable=self._ffmpeg_var, bg=BG, fg=FG_DIM,
-                 font=("Segoe UI", 8)).pack(side="bottom", pady=4)
+        tk.Label(bottom_bar, textvariable=self._ffmpeg_var, bg=BG, fg=FG_DIM,
+                 font=("Segoe UI", 8)).pack(side="left")
+
+        tk.Label(bottom_bar, text="version 0.1", bg=BG, fg=FG_DIM,
+                 font=("Segoe UI", 8)).pack(side="right")
 
     def _init_ffmpeg(self):
         exe = find_ffmpeg()
