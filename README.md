@@ -1,4 +1,4 @@
-Audio Convertor (used ffmpeg)
+Audio Converter (used ffmpeg)
 
 
 Support all audio formats: m4a, aac, mp3, flac, wav, ogg, wma, opus, aiff, ape, mp2, ac3...
