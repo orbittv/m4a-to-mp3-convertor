@@ -155,6 +155,12 @@ class ConverterApp(tk.Tk):
         style.map("Convert.TButton",
                   background=[("active", ACCENT2), ("disabled", BG2)],
                   foreground=[("active", "#ffffff"), ("disabled", FG_DIM)])
+        style.configure("Green.Horizontal.TProgressbar",
+                        troughcolor=BG2,
+                        background=GREEN,
+                        bordercolor=BG,
+                        lightcolor=GREEN,
+                        darkcolor=GREEN)
 
     def _build_ui(self):
         top = tk.Frame(self, bg=BG, pady=12, padx=16)
@@ -193,7 +199,8 @@ class ConverterApp(tk.Tk):
 
         self._prog_var = tk.DoubleVar(value=0)
         ttk.Progressbar(self, variable=self._prog_var, maximum=100,
-                        mode="determinate").pack(fill="x")
+                        mode="determinate",
+                        style="Green.Horizontal.TProgressbar").pack(fill="x")
 
         table_frame = tk.Frame(self, bg=BG)
         table_frame.pack(fill="both", expand=True, padx=16, pady=12)
