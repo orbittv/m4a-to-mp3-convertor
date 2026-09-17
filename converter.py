@@ -7,6 +7,7 @@ import sys
 import zipfile
 import urllib.request
 import shutil
+import json
 
 APP_DIR    = os.path.dirname(os.path.abspath(__file__))
 FFMPEG_DIR = os.path.join(APP_DIR, "ffmpeg")
@@ -64,6 +65,53 @@ def download_ffmpeg(progress_cb=None):
         progress_cb(100)
 
 
+def find_ffprobe():
+    """Return path to ffprobe binary (same folder as ffmpeg or PATH)."""
+    local = os.path.join(FFMPEG_DIR, "ffprobe.exe")
+    if os.path.isfile(local):
+        return local
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    return None
+
+
+def probe_file(path):
+    """Return (bitrate_str, samplerate_str) of the audio stream, or ('?', '?')."""
+    ffprobe = find_ffprobe()
+    if not ffprobe:
+        return ("?", "?")
+    cmd = [
+        ffprobe, "-v", "quiet",
+        "-print_format", "json",
+        "-show_streams", "-select_streams", "a:0",
+        path,
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=15)
+        data = json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if not streams:
+            return ("?", "?")
+        s = streams[0]
+        # sample rate
+        sr = s.get("sample_rate", "?")
+        sr_str = "{} Hz".format(sr) if sr != "?" else "?"
+        # bitrate: prefer stream bit_rate, fall back to format bit_rate
+        br = s.get("bit_rate")
+        if not br:
+            fmt = data.get("format", {})
+            br = fmt.get("bit_rate")
+        if br:
+            br_str = "{} kbps".format(int(br) // 1000)
+        else:
+            br_str = "?"
+        return (br_str, sr_str)
+    except Exception:
+        return ("?", "?")
+
+
+
 class ConverterApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -75,6 +123,7 @@ class ConverterApp(tk.Tk):
         self.source_dir = tk.StringVar(value="")
         self.output_dir = tk.StringVar(value="")
         self._files = []
+        self._file_meta = {}   # idx -> (bitrate_str, samplerate_str)
         self._converting = False
         self._ffmpeg_exe = None
 
@@ -149,15 +198,19 @@ class ConverterApp(tk.Tk):
         table_frame = tk.Frame(self, bg=BG)
         table_frame.pack(fill="both", expand=True, padx=16, pady=12)
 
-        cols = ("name", "format", "status")
+        cols = ("name", "format", "bitrate", "samplerate", "status")
         self._tree = ttk.Treeview(table_frame, columns=cols, show="headings",
                                   selectmode="browse")
-        self._tree.heading("name",   text="File name")
-        self._tree.heading("format", text="Format")
-        self._tree.heading("status", text="Status")
-        self._tree.column("name",   width=640, stretch=True,  anchor="w")
-        self._tree.column("format", width=100, stretch=False, anchor="center")
-        self._tree.column("status", width=130, stretch=False, anchor="center")
+        self._tree.heading("name",       text="File name")
+        self._tree.heading("format",     text="Format")
+        self._tree.heading("bitrate",    text="Bitrate")
+        self._tree.heading("samplerate", text="Sample Rate")
+        self._tree.heading("status",     text="Status")
+        self._tree.column("name",       width=480, stretch=True,  anchor="w")
+        self._tree.column("format",     width=110, stretch=False, anchor="center")
+        self._tree.column("bitrate",    width=110, stretch=False, anchor="center")
+        self._tree.column("samplerate", width=110, stretch=False, anchor="center")
+        self._tree.column("status",     width=110, stretch=False, anchor="center")
 
         vsb = ttk.Scrollbar(table_frame, orient="vertical",
                             command=self._tree.yview)
@@ -219,18 +272,36 @@ class ConverterApp(tk.Tk):
             for f in os.listdir(folder)
             if f.lower().endswith(".m4a")
         ])
+        self._file_meta = {}
         for row in self._tree.get_children():
             self._tree.delete(row)
         for i, path in enumerate(self._files):
             fname = os.path.basename(path)
             tag = "odd" if i % 2 else "even"
             self._tree.insert("", "end", iid=str(i),
-                              values=(fname, "M4A -> MP3", "Ready"),
+                              values=(fname, "M4A -> MP3", "...", "...", "Ready"),
                               tags=(tag,))
         n = len(self._files)
         self._count_var.set("{} file{} found".format(n, "s" if n != 1 else ""))
-        self._status_var.set("Ready to convert" if n else "No .m4a files found")
+        self._status_var.set("Reading file info..." if n else "No .m4a files found")
         self._prog_var.set(0)
+        if n:
+            threading.Thread(target=self._probe_all, daemon=True).start()
+
+    def _probe_all(self):
+        """Probe each file in background and update bitrate/samplerate columns."""
+        for i, path in enumerate(self._files):
+            br, sr = probe_file(path)
+            self._file_meta[i] = (br, sr)
+            self.after(0, self._update_meta_row, i, br, sr)
+        self.after(0, lambda: self._status_var.set("Ready to convert"))
+
+    def _update_meta_row(self, idx, br, sr):
+        iid = str(idx)
+        if not self._tree.exists(iid):
+            return
+        old = self._tree.item(iid, "values")
+        self._tree.item(iid, values=(old[0], old[1], br, sr, old[4]))
 
     def _start_conversion(self):
         if self._converting:
@@ -261,7 +332,9 @@ class ConverterApp(tk.Tk):
             stem     = os.path.splitext(fname)[0]
             out_file = os.path.join(self.output_dir.get(), stem + ".mp3")
             self.after(0, self._set_status, i, "Progress")
-            success = self._run_ffmpeg(path, out_file)
+            # use probed meta if available
+            br_str, sr_str = self._file_meta.get(i, ("?", "?"))
+            success = self._run_ffmpeg(path, out_file, br_str, sr_str)
             status  = "Done" if success else "Error"
             done   += 1
             pct     = done * 100 / total
@@ -271,9 +344,19 @@ class ConverterApp(tk.Tk):
                        self._status_var.set("Converting... {}/{}".format(d, t)))
         self.after(0, self._conversion_done)
 
-    def _run_ffmpeg(self, src, dst):
+    def _run_ffmpeg(self, src, dst, br_str="?", sr_str="?"):
+        # parse bitrate: "256 kbps" -> "256k", fallback 192k
+        try:
+            ab = str(int(br_str.split()[0])) + "k" if br_str != "?" else "192k"
+        except Exception:
+            ab = "192k"
+        # parse sample rate: "44100 Hz" -> "44100", fallback 44100
+        try:
+            ar = sr_str.split()[0] if sr_str != "?" else "44100"
+        except Exception:
+            ar = "44100"
         cmd = [self._ffmpeg_exe, "-y", "-i", src,
-               "-vn", "-ab", "320k", "-ar", "44100", "-f", "mp3", dst]
+               "-vn", "-ab", ab, "-ar", ar, "-f", "mp3", dst]
         try:
             r = subprocess.run(cmd, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, timeout=300)
@@ -289,7 +372,7 @@ class ConverterApp(tk.Tk):
                 if t not in ("progress", "done", "error")]
         tags.append(status.lower())
         old = self._tree.item(iid, "values")
-        self._tree.item(iid, values=(old[0], old[1], status), tags=tags)
+        self._tree.item(iid, values=(old[0], old[1], old[2], old[3], status), tags=tags)
         self._tree.see(iid)
 
     def _conversion_done(self):
