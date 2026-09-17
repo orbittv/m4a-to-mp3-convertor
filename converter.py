@@ -269,7 +269,7 @@ class ConverterApp(tk.Tk):
         tk.Label(bottom_bar, textvariable=self._ffmpeg_var, bg=BG, fg=FG_DIM,
                  font=("Segoe UI", 8)).pack(side="left")
 
-        tk.Label(bottom_bar, text="version 0.1", bg=BG, fg=FG_DIM,
+        tk.Label(bottom_bar, text="version 0.2", bg=BG, fg=FG_DIM,
                  font=("Segoe UI", 8)).pack(side="right")
 
     def _init_ffmpeg(self):
